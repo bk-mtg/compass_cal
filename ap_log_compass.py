@@ -87,6 +87,8 @@ def rotation_up(vec):
 	# temporary hack for not doing a very good job here:
 	if theta < 0.1:
 		theta = 0
+	elif theta > 0.9:
+		print("WARNING: looks like your orientation might be off?")
 	return rotation_matrix(np.transpose(axis), theta)
 
 def plot_mag_rotated(mag, ax=None, inclination=61):
@@ -111,10 +113,15 @@ def plot_mag_rotated(mag, ax=None, inclination=61):
 	zc = zC-zc
 	
 	# pass the center coordiantes backward through the rotation to get the original offsets
-	Xc = np.linalg.inv(R) @ np.array([[xc],[yc],[zc]])
+	Xc1 = np.linalg.inv(R) @ np.array([[xc],[yc],[zc]])
+	Xc = np.linalg.inv(R) @ np.array([[xc],[yc],[zC]])
+	zc = xr * np.tan(inclination)
+	if Xc[2] < 0:
+		zc = -zc
+	Xc[2] = Xc[2]-zc
 	
 	# and make a plot
-	new_mag2 = (S @ R) @ [mag['MagX']-Xc[0], mag['MagY']-Xc[1], mag['MagZ']-Xc[2]]
+	new_mag2 = (S @ R) @ [mag['MagX']-Xc1[0], mag['MagY']-Xc1[1], mag['MagZ']-Xc1[2]]
 	new_mag3 = S @ [mag['MagX']-Xc[0], mag['MagY']-Xc[1], mag['MagZ']-Xc[2]]
 	new_mag = new_mag2
 	new_mag = dict(zip(('MagX', 'MagY', 'MagZ'), new_mag))
@@ -133,11 +140,19 @@ def print_cal(S, Xc, number, params):
 		number = ''
 	else:
 		number = str(number)
+	if np.shape(Xc) == (3,1):
+		Xc = np.transpose(Xc)[0]
 		
 	root = 'COMPASS_OFS' + number + '_'
-	oldxc = np.array([params[root+'X'], params[root+'Y'], params[root+'Z']]).astype(float)
-	print(root+'X:', -Xc[0]+oldxc[0], root+'Y:', -Xc[1]+oldxc[1], root+'Z:', -Xc[2]+oldxc[2])
 	dia = 'COMPASS_DIA'+number+'_'
+	oldxc = np.array([params[root+'X'], params[root+'Y'], params[root+'Z']]).astype(float)
+	olddia = np.array([params[dia+'X'], params[dia+'Y'], params[dia+'Z']]).astype(float)
+	if not all(olddia == 1):
+		print("WARNING: operating with old scaling present not well tested\n")
+		# scale appropriately
+		Xc = Xc/olddia
+		S = np.diag(S @ (1/olddia))
+	print(root+'X:', -Xc[0]+oldxc[0], root+'Y:', -Xc[1]+oldxc[1], root+'Z:', -Xc[2]+oldxc[2])
 	print(dia+'X:', S[0][0], dia+'Y', S[1][1], dia+'Z', S[2][2])
 	print('COMPASS_ODI'+number+'_{X,Y,Z} = 0')
 

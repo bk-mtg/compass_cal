@@ -1,6 +1,8 @@
 import re
+import math
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 def read_ap_log(filename):
 	data = {'FMT': {}}
@@ -35,6 +37,18 @@ def plot_mag(mag):
 	plt.plot(mag['TimeUS'], mag['MagY'])
 	plt.plot(mag['TimeUS'], mag['MagZ'])
 
+def plot_mag_3d(mag, ax=None):
+	if ax is None:
+		fig = plt.figure();
+		ax = fig.add_subplot(111, projection='3d')
+	ax.scatter3D(mag['MagX'], mag['MagY'], mag['MagZ'])
+	return ax
+
+def plot_mag_circles_3d(data):
+	ax = plot_mag_3d(data['MAG'])
+	plot_mag_3d(data['MAG2'], ax)
+	plot_mag_3d(data['MAG3'], ax)
+
 def plot_mag_circles(data):
 	mag1 = data['MAG']
 	mag2 = data['MAG2']
@@ -42,9 +56,110 @@ def plot_mag_circles(data):
 	plt.figure();
 	plt.plot(mag1['MagX'],mag1['MagZ'], mag2['MagX'],mag2['MagY'], mag3['MagX'], mag3['MagY'])
 
+def determine_plane_rotation(mag):
+	r = np.linalg.lstsq(np.transpose([mag['MagX'], mag['MagY'], mag['MagZ']]), np.ones([len(mag['MagX']), 1]), rcond=None)
+	r = r[0] # just the fit results please
+	r = r/math.sqrt(sum(r*r))
+	return r
+
+def rotation_matrix(axis, theta):
+	"""
+	Return the rotation matrix associated with counterclockwise rotation about
+	the given axis by theta radians.
+	http://en.wikipedia.org/wiki/Euler–Rodrigues_formula
+	https://stackoverflow.com/questions/6802577/rotation-of-3d-vector/6802723#6802723
+	"""
+	axis = np.asarray(axis)
+	axis = axis / math.sqrt(sum(axis*axis))
+	a = math.cos(theta / 2.0)
+	b, c, d = -axis * math.sin(theta / 2.0)
+	aa, bb, cc, dd = a * a, b * b, c * c, d * d
+	bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+	return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+	                 [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+	                 [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+
+def rotation_up(vec):
+	up = [0,0,1]
+	vec = np.transpose(vec)
+	axis = np.cross(vec, up)
+	theta = math.acos(np.dot(vec, up))
+	# temporary hack for not doing a very good job here:
+	if theta < 0.1:
+		theta = 0
+	return rotation_matrix(np.transpose(axis), theta)
+
+def plot_mag_rotated(mag, ax=None, inclination=61):
+	# compute rotation and re-orient so that we have a circle at constant Z
+	r = determine_plane_rotation(mag);
+	R = rotation_up(np.transpose(r)[0])
+	new_mag = R @ [mag['MagX'], mag['MagY'], mag['MagZ']]
+	# determine the center of the circle
+	xM = max(new_mag[0]); xm = min(new_mag[0])
+	xr = (xM-xm)/2; xc = (xM+xm)/2
+	yM = max(new_mag[1]); ym = min(new_mag[1])
+	yr = (yM-ym)/2; yc = (yM+ym)/2
+	zC = sum(new_mag[2])/len(new_mag[2])
+	# add a scale to keep xr == yr by adjusting yr
+	S = np.array([[1,0,0], [0,xr/yr, 0], [0,0,1]])
+	
+	# assume the z coordinate should be given by the inclination
+	inclination = inclination*np.pi/180
+	zc = xr * np.tan(inclination)
+	if zC < 0:
+		zc = -zc
+	zc = zC-zc
+	
+	# pass the center coordiantes backward through the rotation to get the original offsets
+	Xc = np.linalg.inv(R) @ np.array([[xc],[yc],[zc]])
+	
+	# and make a plot
+	new_mag2 = (S @ R) @ [mag['MagX']-Xc[0], mag['MagY']-Xc[1], mag['MagZ']-Xc[2]]
+	new_mag3 = S @ [mag['MagX']-Xc[0], mag['MagY']-Xc[1], mag['MagZ']-Xc[2]]
+	new_mag = new_mag2
+	new_mag = dict(zip(('MagX', 'MagY', 'MagZ'), new_mag))
+	ax = plot_mag_3d(mag)
+	plot_mag_3d(new_mag, ax)
+	new_mag = dict(zip(('MagX', 'MagY', 'MagZ'), new_mag3))
+	plot_mag_3d(new_mag, ax)
+
+	return (S, R, Xc, new_mag)
+
+def get_parm_dict(data):
+	return dict(zip(data['PARM']['Name'], data['PARM']['Value\n']))
+
+def print_cal(S, Xc, number, params):
+	if number is None:
+		number = ''
+	else:
+		number = str(number)
+		
+	root = 'COMPASS_OFS' + number + '_'
+	oldxc = np.array([params[root+'X'], params[root+'Y'], params[root+'Z']]).astype(float)
+	print(root+'X:', -Xc[0]+oldxc[0], root+'Y:', -Xc[1]+oldxc[1], root+'Z:', -Xc[2]+oldxc[2])
+	dia = 'COMPASS_DIA'+number+'_'
+	print(dia+'X:', S[0][0], dia+'Y', S[1][1], dia+'Z', S[2][2])
+	print('COMPASS_ODI'+number+'_{X,Y,Z} = 0')
+
+def calibrate(filename):
+	data = read_ap_log(filename);
+	print('Calibration for', filename)
+	
+	parameters = get_parm_dict(data)
+	print('Magnetometer 1 calibration:')
+	(S, R, Xc, new_mag) = plot_mag_rotated(data['MAG'])
+	print_cal(S, Xc, '', parameters)
+	print('Magnetometer 2 calibration:')
+	(S, R, Xc, new_mag) = plot_mag_rotated(data['MAG2'])
+	print_cal(S, Xc, '2', parameters)
+	print('Magnetometer 3 calibration:')
+	(S, R, Xc, new_mag) = plot_mag_rotated(data['MAG3'])
+	print_cal(S, Xc, '3', parameters)
+
 
 if __name__ == '__main__':
-	data = read_ap_log('/Users/ben/Downloads/2018-11-05 12-39-01.log');
+	calibrate('2018-11-05 12-39-01.log');
+	exit();
 	
 	plt.ion()
 	

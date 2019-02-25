@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 
+import pixhawk
+
 import numpy as np
 import utm
 
@@ -61,13 +63,7 @@ def meters_to_latlon(f8, lat, lon):
     lat = np.array(lat); lon = np.array(lon)
     return (lat,lon)
 
-def waypoints_to_file(lat, lon):
-    print("QGC WPL 110")
-    print("0\t1\t0\t16\t0\t0\t0\t0\t{}\t{}\t20\t1".format(lat[0],lon[0]))
-    for i,lat_ in enumerate(lat):
-        print("{}\t0\t3\t16\t0\t0\t0\t0\t{}\t{}\t1\t1".format(i+1, lat_, lon[i]))
-
 if __name__ == '__main__':
     x,y = figure_8(scale=13.1)
     latlon = meters_to_latlon((x,y), 37.3119437, -120.509202)
-    waypoints_to_file(latlon[0],latlon[1])
+    pixhawk.waypoints_to_file(latlon[0],latlon[1])
